@@ -43,6 +43,11 @@ CACHE::CACHE(CACHE&& other)
       pref_activate_mask(std::move(other.pref_activate_mask)),
 
       sim_stats(std::move(other.sim_stats)), roi_stats(std::move(other.roi_stats)),
+      enable_static_partitioning(other.enable_static_partitioning), enable_ucp(other.enable_ucp),
+      partition_cpu_count(other.partition_cpu_count), current_partition(std::move(other.current_partition)),
+      new_partition(std::move(other.new_partition)), line_owner_cpu(std::move(other.line_owner_cpu)),
+      set_core_occupancy(std::move(other.set_core_occupancy)), llc_access_counter(other.llc_access_counter),
+      repartition_interval(other.repartition_interval), repartition_count(other.repartition_count),
 
       pref_module_pimpl(std::move(other.pref_module_pimpl)), repl_module_pimpl(std::move(other.repl_module_pimpl))
 {
@@ -83,6 +88,17 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
   this->sim_stats = std::move(other.sim_stats);
   this->roi_stats = std::move(other.roi_stats);
 
+  this->enable_static_partitioning = other.enable_static_partitioning;
+  this->enable_ucp = other.enable_ucp;
+  this->partition_cpu_count = other.partition_cpu_count;
+  this->current_partition = std::move(other.current_partition);
+  this->new_partition = std::move(other.new_partition);
+  this->line_owner_cpu = std::move(other.line_owner_cpu);
+  this->set_core_occupancy = std::move(other.set_core_occupancy);
+  this->llc_access_counter = other.llc_access_counter;
+  this->repartition_interval = other.repartition_interval;
+  this->repartition_count = other.repartition_count;
+
   this->pref_module_pimpl = std::move(other.pref_module_pimpl);
   this->repl_module_pimpl = std::move(other.repl_module_pimpl);
 
@@ -91,6 +107,72 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
 
   return *this;
 }
+
+bool CACHE::partitioning_enabled() const
+{
+  return enable_static_partitioning || enable_ucp;
+}
+
+bool CACHE::ucp_enabled() const
+{
+  return enable_ucp;
+}
+
+std::size_t CACHE::owner_index(long set, long way) const
+{
+  return static_cast<std::size_t>(set * NUM_WAY + way);
+}
+
+std::size_t CACHE::occupancy_index(long set, uint32_t cpu) const
+{
+  return static_cast<std::size_t>(set * partition_cpu_count + cpu);
+}
+
+int32_t CACHE::get_line_owner(long set, long way) const
+{
+  return line_owner_cpu.at(owner_index(set, way));
+}
+
+void CACHE::set_line_owner(long set, long way, int32_t cpu)
+{
+  line_owner_cpu.at(owner_index(set, way)) = cpu;
+}
+
+uint32_t CACHE::get_set_core_occupancy(long set, uint32_t cpu) const
+{
+  return set_core_occupancy.at(occupancy_index(set, cpu));
+}
+
+void CACHE::inc_set_core_occupancy(long set, uint32_t cpu)
+{
+  auto& x = set_core_occupancy.at(occupancy_index(set, cpu));
+  ++x;
+}
+
+void CACHE::dec_set_core_occupancy(long set, uint32_t cpu)
+{
+  auto& x = set_core_occupancy.at(occupancy_index(set, cpu));
+  assert(x > 0);
+  --x;
+}
+
+bool CACHE::cpu_has_room_in_set(long set, uint32_t cpu) const
+{
+  return get_set_core_occupancy(set, cpu) < current_partition.at(cpu);
+}
+
+void CACHE::initialize_equal_partition(uint32_t num_cpus)
+{
+  current_partition.assign(num_cpus, NUM_WAY / num_cpus);
+  uint32_t leftover = NUM_WAY % num_cpus;
+
+  for (uint32_t c = 0; c < leftover; c++) {
+    current_partition[c]++;
+  }
+
+  new_partition = current_partition;
+}
+
 
 CACHE::tag_lookup_type::tag_lookup_type(const request_type& req, bool local_pref, bool skip)
     : address(req.address), v_address(req.v_address), data(req.data), ip(req.ip), instr_id(req.instr_id), pf_metadata(req.pf_metadata), cpu(req.cpu),
@@ -181,6 +263,7 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
   assert(way <= set_end);
   assert(way != set_end || fill_mshr.type != access_type::WRITE); // Writes may not bypass
   const auto way_idx = std::distance(set_begin, way);             // cast protected by earlier assertion
+  const auto set_idx = get_set_index(fill_mshr.address);
 
   if constexpr (champsim::debug_print) {
     fmt::print("[{}] {} instr_id: {} address: {} v_address: {} set: {} way: {} type: {} prefetch_metadata: {} cycle_enqueued: {} cycle: {}\n", NAME, __func__,
@@ -223,6 +306,13 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
                               fill_mshr.type);
 
   if (way != set_end) {
+    if (partitioning_enabled() && way->valid) {
+      int32_t old_owner = get_line_owner(set_idx, way_idx);
+      if (old_owner >= 0) {
+        dec_set_core_occupancy(set_idx, static_cast<uint32_t>(old_owner));
+      }
+    }
+
     if (way->valid && way->prefetch) {
       ++sim_stats.pf_useless;
     }
@@ -232,6 +322,11 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     }
 
     *way = fill_block(fill_mshr, metadata_thru);
+
+    if (partitioning_enabled()) {
+      set_line_owner(set_idx, way_idx, static_cast<int32_t>(fill_mshr.cpu));
+      inc_set_core_occupancy(set_idx, fill_mshr.cpu);
+    }
   }
 
   // COLLECT STATS
@@ -567,6 +662,17 @@ long CACHE::invalidate_entry(champsim::address inval_addr)
   auto inv_way = std::find_if(begin, end, matches_address(inval_addr));
 
   if (inv_way != end) {
+    if (partitioning_enabled()) {
+      const auto set_idx = get_set_index(inval_addr);
+      const auto way_idx = std::distance(begin, inv_way);
+
+      int32_t old_owner = get_line_owner(set_idx, way_idx);
+      if (old_owner >= 0) {
+        dec_set_core_occupancy(set_idx, static_cast<uint32_t>(old_owner));
+        set_line_owner(set_idx, way_idx, -1);
+      }
+    }
+
     inv_way->valid = false;
   }
 
@@ -934,3 +1040,4 @@ void CACHE::print_deadlock()
   }
 }
 // LCOV_EXCL_STOP
+
