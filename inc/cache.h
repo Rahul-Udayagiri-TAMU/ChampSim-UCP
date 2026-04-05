@@ -22,6 +22,7 @@
 #undef CHAMPSIM_MODULE
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cstddef> // for size_t
 #include <cstdint> // for uint64_t, uint32_t, uint8_t
@@ -49,6 +50,7 @@
 
 class CACHE : public champsim::operable
 {
+
   enum [[deprecated(
       "Prefetchers may not specify arbitrary fill levels. Use CACHE::prefetch_line(pf_addr, fill_this_level, prefetch_metadata) instead.")]] FILL_LEVEL{
       FILL_L1 = 1, FILL_L2 = 2, FILL_LLC = 4, FILL_DRC = 8, FILL_DRAM = 16};
@@ -125,9 +127,45 @@ private:
 public:
   using BLOCK = champsim::cache_block;
 
-private:
+public:
   static BLOCK fill_block(mshr_type mshr, uint32_t metadata);
   using set_type = std::vector<BLOCK>;
+
+  // Partitioning helper declarations
+  bool partitioning_enabled() const;
+  bool ucp_enabled() const;
+
+  std::size_t owner_index(long set, long way) const;
+  std::size_t occupancy_index(long set, uint32_t cpu) const;
+
+  int32_t get_line_owner(long set, long way) const;
+  void set_line_owner(long set, long way, int32_t cpu);
+
+  uint32_t get_set_core_occupancy(long set, uint32_t cpu) const;
+  void inc_set_core_occupancy(long set, uint32_t cpu);
+  void dec_set_core_occupancy(long set, uint32_t cpu);
+
+  bool cpu_has_room_in_set(long set, uint32_t cpu) const;
+  void initialize_equal_partition(uint32_t num_cpus);
+
+  // Partitioning state
+  bool enable_static_partitioning = false;
+  bool enable_ucp = false;
+
+  uint32_t partition_cpu_count = 1;
+
+  std::vector<uint32_t> current_partition;
+  std::vector<uint32_t> new_partition;
+
+  // One entry per cache line: owner cpu, -1 means invalid/unowned
+  std::vector<int32_t> line_owner_cpu;
+
+  // Flattened indexing: set * partition_cpu_count + cpu
+  std::vector<uint32_t> set_core_occupancy;
+
+  uint64_t llc_access_counter = 0;
+  uint64_t repartition_interval = 0;
+  uint64_t repartition_count = 0;
 
   std::pair<set_type::iterator, set_type::iterator> get_set_span(champsim::address address);
   [[nodiscard]] std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(champsim::address address) const;
@@ -323,6 +361,25 @@ public:
         prefetch_as_load(b.m_pref_load), match_offset_bits(b.m_wq_full_addr), virtual_prefetch(b.m_va_pref), pref_activate_mask(b.m_pref_act_mask),
         pref_module_pimpl(std::make_unique<prefetcher_module_model<Ps...>>(this)), repl_module_pimpl(std::make_unique<replacement_module_model<Rs...>>(this))
   {
+    line_owner_cpu.assign(static_cast<std::size_t>(NUM_SET * NUM_WAY), -1);
+
+    enable_static_partitioning = (NAME == "LLC");
+    enable_ucp = false;
+
+    partition_cpu_count = enable_static_partitioning ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size())) : 1;
+
+    set_core_occupancy.assign(static_cast<std::size_t>(NUM_SET * partition_cpu_count), 0);
+
+    if (enable_static_partitioning) {
+      initialize_equal_partition(partition_cpu_count);
+    } else {
+      current_partition.assign(partition_cpu_count, NUM_WAY);
+      new_partition.assign(partition_cpu_count, NUM_WAY);
+    }
+
+    llc_access_counter = 0;
+    repartition_interval = 0;
+    repartition_count = 0;
   }
 
   CACHE(const CACHE&) = delete;
