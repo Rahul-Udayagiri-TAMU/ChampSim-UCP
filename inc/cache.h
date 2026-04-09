@@ -395,7 +395,7 @@ partition_cpu_count = (enable_static_partitioning || enable_ucp)
     ucp_epoch_counter = 0;
 
     llc_access_counter = 0;
-    repartition_interval = 1000;
+    repartition_interval = 1000000;
     repartition_count = 0;
   }
 

@@ -242,7 +242,6 @@ void CACHE::recompute_ucp_partition()
 
   static int ucp_debug_prints = 0;
   if (NAME == "LLC" && ucp_debug_prints < 20) {
-    fmt::print("[UCP_DEBUG] repartition={} partition=", repartition_count);
     for (uint32_t c = 0; c < partition_cpu_count; c++) {
       fmt::print("{}{}", current_partition.at(c), (c + 1 == partition_cpu_count) ? "" : ",");
     }
