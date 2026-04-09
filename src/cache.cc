@@ -46,8 +46,9 @@ CACHE::CACHE(CACHE&& other)
       enable_static_partitioning(other.enable_static_partitioning), enable_ucp(other.enable_ucp),
       partition_cpu_count(other.partition_cpu_count), current_partition(std::move(other.current_partition)),
       new_partition(std::move(other.new_partition)), line_owner_cpu(std::move(other.line_owner_cpu)),
-      set_core_occupancy(std::move(other.set_core_occupancy)), llc_access_counter(other.llc_access_counter),
-      repartition_interval(other.repartition_interval), repartition_count(other.repartition_count),
+      set_core_occupancy(std::move(other.set_core_occupancy)), ucp_way_utility(std::move(other.ucp_way_utility)),
+      ucp_fill_count(std::move(other.ucp_fill_count)), ucp_epoch_counter(other.ucp_epoch_counter),
+      llc_access_counter(other.llc_access_counter), repartition_interval(other.repartition_interval), repartition_count(other.repartition_count),
 
       pref_module_pimpl(std::move(other.pref_module_pimpl)), repl_module_pimpl(std::move(other.repl_module_pimpl))
 {
@@ -95,6 +96,9 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
   this->new_partition = std::move(other.new_partition);
   this->line_owner_cpu = std::move(other.line_owner_cpu);
   this->set_core_occupancy = std::move(other.set_core_occupancy);
+  this->ucp_way_utility = std::move(other.ucp_way_utility);
+  this->ucp_fill_count = std::move(other.ucp_fill_count);
+  this->ucp_epoch_counter = other.ucp_epoch_counter;
   this->llc_access_counter = other.llc_access_counter;
   this->repartition_interval = other.repartition_interval;
   this->repartition_count = other.repartition_count;
@@ -126,6 +130,11 @@ std::size_t CACHE::owner_index(long set, long way) const
 std::size_t CACHE::occupancy_index(long set, uint32_t cpu) const
 {
   return static_cast<std::size_t>(set * partition_cpu_count + cpu);
+}
+
+std::size_t CACHE::utility_index(uint32_t cpu, uint32_t way_budget) const
+{
+  return static_cast<std::size_t>(cpu * NUM_WAY + way_budget);
 }
 
 int32_t CACHE::get_line_owner(long set, long way) const
@@ -171,6 +180,90 @@ void CACHE::initialize_equal_partition(uint32_t num_cpus)
   }
 
   new_partition = current_partition;
+}
+
+void CACHE::reset_ucp_epoch()
+{
+  std::fill(std::begin(ucp_way_utility), std::end(ucp_way_utility), 0);
+  std::fill(std::begin(ucp_fill_count), std::end(ucp_fill_count), 0);
+  ucp_epoch_counter = 0;
+}
+
+void CACHE::update_ucp_on_fill(uint32_t cpu, long set, long way)
+{
+  (void)way;
+
+  if (!ucp_enabled()) {
+    return;
+  }
+
+  if (cpu < partition_cpu_count) {
+    ucp_fill_count.at(cpu)++;
+    const auto occ = get_set_core_occupancy(set, cpu);
+    if (occ > 0 && occ <= NUM_WAY) {
+      ucp_way_utility.at(utility_index(cpu, occ - 1))++;
+    }
+  }
+}
+
+void CACHE::recompute_ucp_partition()
+{
+  if (!ucp_enabled()) {
+    return;
+  }
+
+  new_partition.assign(partition_cpu_count, 1);
+  uint32_t assigned = partition_cpu_count;
+
+  while (assigned < NUM_WAY) {
+    uint32_t best_cpu = 0;
+    uint64_t best_gain = 0;
+
+    for (uint32_t c = 0; c < partition_cpu_count; c++) {
+      if (new_partition.at(c) >= NUM_WAY) {
+        continue;
+      }
+
+      const auto idx = utility_index(c, new_partition.at(c));
+      const auto gain = (idx < ucp_way_utility.size()) ? ucp_way_utility.at(idx) : 0;
+
+      if (gain >= best_gain) {
+        best_gain = gain;
+        best_cpu = c;
+      }
+    }
+
+    new_partition.at(best_cpu)++;
+    assigned++;
+  }
+
+  current_partition = new_partition;
+  repartition_count++;
+
+  static int ucp_debug_prints = 0;
+  if (NAME == "LLC" && ucp_debug_prints < 20) {
+    fmt::print("[UCP_DEBUG] repartition={} partition=", repartition_count);
+    for (uint32_t c = 0; c < partition_cpu_count; c++) {
+      fmt::print("{}{}", current_partition.at(c), (c + 1 == partition_cpu_count) ? "" : ",");
+    }
+    fmt::print("\n");
+    ucp_debug_prints++;
+  }
+}
+
+void CACHE::maybe_repartition()
+{
+  if (!ucp_enabled()) {
+    return;
+  }
+
+  ucp_epoch_counter++;
+  llc_access_counter++;
+
+  if (repartition_interval != 0 && (ucp_epoch_counter % repartition_interval) == 0) {
+    recompute_ucp_partition();
+    reset_ucp_epoch();
+  }
 }
 
 
@@ -326,6 +419,8 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     if (partitioning_enabled()) {
       set_line_owner(set_idx, way_idx, static_cast<int32_t>(fill_mshr.cpu));
       inc_set_core_occupancy(set_idx, fill_mshr.cpu);
+      update_ucp_on_fill(fill_mshr.cpu, set_idx, way_idx);
+      maybe_repartition();
     }
   }
 

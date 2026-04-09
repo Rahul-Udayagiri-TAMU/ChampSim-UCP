@@ -148,6 +148,13 @@ public:
   bool cpu_has_room_in_set(long set, uint32_t cpu) const;
   void initialize_equal_partition(uint32_t num_cpus);
 
+  std::size_t utility_index(uint32_t cpu, uint32_t way_budget) const;
+
+  void reset_ucp_epoch();
+  void update_ucp_on_fill(uint32_t cpu, long set, long way);
+  void maybe_repartition();
+  void recompute_ucp_partition();
+
   // Partitioning state
   bool enable_static_partitioning = false;
   bool enable_ucp = false;
@@ -162,6 +169,10 @@ public:
 
   // Flattened indexing: set * partition_cpu_count + cpu
   std::vector<uint32_t> set_core_occupancy;
+
+  std::vector<uint64_t> ucp_way_utility;
+  std::vector<uint64_t> ucp_fill_count;
+  uint64_t ucp_epoch_counter = 0;
 
   uint64_t llc_access_counter = 0;
   uint64_t repartition_interval = 0;
@@ -363,22 +374,28 @@ public:
   {
     line_owner_cpu.assign(static_cast<std::size_t>(NUM_SET * NUM_WAY), -1);
 
-    enable_static_partitioning = (NAME == "LLC");
-    enable_ucp = false;
+    enable_static_partitioning = false;
+    enable_ucp = (NAME == "LLC");
 
-    partition_cpu_count = enable_static_partitioning ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size())) : 1;
+partition_cpu_count = (enable_static_partitioning || enable_ucp)
+                        ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size()))
+                        : 1;
 
     set_core_occupancy.assign(static_cast<std::size_t>(NUM_SET * partition_cpu_count), 0);
 
-    if (enable_static_partitioning) {
+    if (enable_static_partitioning || enable_ucp) {
       initialize_equal_partition(partition_cpu_count);
     } else {
       current_partition.assign(partition_cpu_count, NUM_WAY);
       new_partition.assign(partition_cpu_count, NUM_WAY);
     }
 
+    ucp_way_utility.assign(static_cast<std::size_t>(partition_cpu_count * NUM_WAY), 0);
+    ucp_fill_count.assign(static_cast<std::size_t>(partition_cpu_count), 0);
+    ucp_epoch_counter = 0;
+
     llc_access_counter = 0;
-    repartition_interval = 0;
+    repartition_interval = 1000;
     repartition_count = 0;
   }
 
