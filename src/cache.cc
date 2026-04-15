@@ -46,11 +46,11 @@ CACHE::CACHE(CACHE&& other)
       enable_static_partitioning(other.enable_static_partitioning), enable_ucp(other.enable_ucp),
       partition_cpu_count(other.partition_cpu_count), current_partition(std::move(other.current_partition)),
       new_partition(std::move(other.new_partition)), line_owner_cpu(std::move(other.line_owner_cpu)),
-      set_core_occupancy(std::move(other.set_core_occupancy)), ucp_hit_position(std::move(other.ucp_hit_position)),
-      ucp_atd_tags(std::move(other.ucp_atd_tags)), ucp_atd_valid(std::move(other.ucp_atd_valid)),
-      ucp_atd_lru(std::move(other.ucp_atd_lru)), ucp_num_sampled_sets(other.ucp_num_sampled_sets),
-      ucp_sample_stride(other.ucp_sample_stride), ucp_epoch_counter(other.ucp_epoch_counter),
-      llc_access_counter(other.llc_access_counter), repartition_interval(other.repartition_interval), repartition_count(other.repartition_count),
+      set_core_occupancy(std::move(other.set_core_occupancy)), ucp_way_utility(std::move(other.ucp_way_utility)),
+      ucp_sampled_set_count(other.ucp_sampled_set_count), ucp_sampled_set_stride(other.ucp_sampled_set_stride),
+      umon_tags(std::move(other.umon_tags)), umon_valid(std::move(other.umon_valid)), umon_lru_position(std::move(other.umon_lru_position)),
+      ucp_epoch_counter(other.ucp_epoch_counter), llc_access_counter(other.llc_access_counter),
+      repartition_interval(other.repartition_interval), next_repartition_cycle(other.next_repartition_cycle), repartition_count(other.repartition_count),
 
       pref_module_pimpl(std::move(other.pref_module_pimpl)), repl_module_pimpl(std::move(other.repl_module_pimpl))
 {
@@ -98,15 +98,16 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
   this->new_partition = std::move(other.new_partition);
   this->line_owner_cpu = std::move(other.line_owner_cpu);
   this->set_core_occupancy = std::move(other.set_core_occupancy);
-  this->ucp_hit_position = std::move(other.ucp_hit_position);
-  this->ucp_atd_tags = std::move(other.ucp_atd_tags);
-  this->ucp_atd_valid = std::move(other.ucp_atd_valid);
-  this->ucp_atd_lru = std::move(other.ucp_atd_lru);
-  this->ucp_num_sampled_sets = other.ucp_num_sampled_sets;
-  this->ucp_sample_stride = other.ucp_sample_stride;
+  this->ucp_way_utility = std::move(other.ucp_way_utility);
+  this->ucp_sampled_set_count = other.ucp_sampled_set_count;
+  this->ucp_sampled_set_stride = other.ucp_sampled_set_stride;
+  this->umon_tags = std::move(other.umon_tags);
+  this->umon_valid = std::move(other.umon_valid);
+  this->umon_lru_position = std::move(other.umon_lru_position);
   this->ucp_epoch_counter = other.ucp_epoch_counter;
   this->llc_access_counter = other.llc_access_counter;
   this->repartition_interval = other.repartition_interval;
+  this->next_repartition_cycle = other.next_repartition_cycle;
   this->repartition_count = other.repartition_count;
 
   this->pref_module_pimpl = std::move(other.pref_module_pimpl);
@@ -138,25 +139,34 @@ std::size_t CACHE::occupancy_index(long set, uint32_t cpu) const
   return static_cast<std::size_t>(set * partition_cpu_count + cpu);
 }
 
-
 std::size_t CACHE::utility_index(uint32_t cpu, uint32_t way_budget) const
 {
   return static_cast<std::size_t>(cpu * NUM_WAY + way_budget);
 }
 
-std::size_t CACHE::atd_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const
+std::size_t CACHE::umon_tag_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const
 {
-  return (static_cast<std::size_t>(cpu) * ucp_num_sampled_sets + sampled_set) * NUM_WAY + way;
+  return static_cast<std::size_t>((cpu * ucp_sampled_set_count + sampled_set) * NUM_WAY + way);
 }
 
-bool CACHE::is_ucp_sampled_set(long set) const
+std::size_t CACHE::umon_lru_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const
 {
-  return ucp_enabled() && ucp_num_sampled_sets != 0 && set >= 0 && (static_cast<uint32_t>(set) % ucp_sample_stride) == 0;
+  return static_cast<std::size_t>((cpu * ucp_sampled_set_count + sampled_set) * NUM_WAY + way);
+}
+
+bool CACHE::is_sampled_set(long set) const
+{
+  if (ucp_sampled_set_count == 0 || ucp_sampled_set_stride == 0 || set < 0) {
+    return false;
+  }
+
+  return (static_cast<uint32_t>(set) % ucp_sampled_set_stride) == 0 &&
+         (static_cast<uint32_t>(set) / ucp_sampled_set_stride) < ucp_sampled_set_count;
 }
 
 uint32_t CACHE::sampled_set_index(long set) const
 {
-  return static_cast<uint32_t>(set) / ucp_sample_stride;
+  return static_cast<uint32_t>(set) / ucp_sampled_set_stride;
 }
 
 int32_t CACHE::get_line_owner(long set, long way) const
@@ -204,84 +214,76 @@ void CACHE::initialize_equal_partition(uint32_t num_cpus)
   new_partition = current_partition;
 }
 
+void CACHE::reset_ucp_epoch()
+{
+  std::fill(std::begin(ucp_way_utility), std::end(ucp_way_utility), 0);
+  ucp_epoch_counter = 0;
+}
+
 void CACHE::decay_ucp_epoch()
 {
-  for (auto& x : ucp_hit_position) {
+  for (auto& x : ucp_way_utility) {
     x >>= 1;
   }
   ucp_epoch_counter = 0;
 }
 
-void CACHE::observe_ucp_access(uint32_t req_cpu, long set, champsim::address full_addr, access_type type)
+void CACHE::update_ucp_on_access(uint32_t cpu, long set, champsim::address address, access_type type)
 {
-  if (!ucp_enabled() || req_cpu >= partition_cpu_count || !is_ucp_sampled_set(set) || type == access_type::WRITE) {
+  if (!ucp_enabled() || cpu >= partition_cpu_count || !is_sampled_set(set)) {
     return;
   }
 
-  const auto sampled_set = sampled_set_index(set);
-  if (sampled_set >= ucp_num_sampled_sets) {
+  if (type == access_type::WRITE) {
     return;
   }
 
-  const auto tag = full_addr.slice_upper(OFFSET_BITS).to<uint64_t>();
+  const auto sample = sampled_set_index(set);
+  auto tag = address.slice_upper(OFFSET_BITS);
 
-  long hit_way = -1;
-  for (long way = 0; way < NUM_WAY; ++way) {
-    const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
-    if (ucp_atd_valid.at(idx) != 0 && ucp_atd_tags.at(idx) == tag) {
-      hit_way = way;
-      break;
+  int hit_way = -1;
+  uint32_t hit_pos = 0;
+  uint32_t victim_way = 0;
+  uint32_t victim_pos = 0;
+  bool found_invalid = false;
+
+  for (uint32_t way = 0; way < NUM_WAY; way++) {
+    const auto idx = umon_tag_index(cpu, sample, way);
+
+    if (umon_valid.at(idx) && umon_tags.at(idx).slice_upper(OFFSET_BITS) == tag) {
+      hit_way = static_cast<int>(way);
+      hit_pos = umon_lru_position.at(idx);
     }
-  }
 
-  if (hit_way >= 0) {
-    const auto pos = ucp_atd_lru.at(atd_index(req_cpu, sampled_set, static_cast<uint32_t>(hit_way)));
-    if (pos < NUM_WAY) {
-      ucp_hit_position.at(utility_index(req_cpu, pos))++;
-    }
-
-    for (long way = 0; way < NUM_WAY; ++way) {
-      const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
-      if (ucp_atd_valid.at(idx) != 0 && ucp_atd_lru.at(idx) < pos) {
-        ucp_atd_lru.at(idx)++;
-      }
-    }
-    ucp_atd_lru.at(atd_index(req_cpu, sampled_set, static_cast<uint32_t>(hit_way))) = 0;
-    return;
-  }
-
-  long victim_way = -1;
-  for (long way = 0; way < NUM_WAY; ++way) {
-    const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
-    if (ucp_atd_valid.at(idx) == 0) {
+    const auto pos = umon_lru_position.at(idx);
+    if (!umon_valid.at(idx) && !found_invalid) {
       victim_way = way;
-      break;
+      victim_pos = pos;
+      found_invalid = true;
+    } else if (!found_invalid && pos >= victim_pos) {
+      victim_way = way;
+      victim_pos = pos;
     }
   }
 
-  if (victim_way < 0) {
-    victim_way = 0;
-    uint8_t max_lru = 0;
-    for (long way = 0; way < NUM_WAY; ++way) {
-      const auto lru = ucp_atd_lru.at(atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way)));
-      if (lru >= max_lru) {
-        max_lru = lru;
-        victim_way = way;
-      }
+  if (hit_way >= 0 && hit_pos < NUM_WAY) {
+    ucp_way_utility.at(utility_index(cpu, hit_pos))++;
+  }
+
+  const uint32_t old_pos = (hit_way >= 0) ? hit_pos : victim_pos;
+  for (uint32_t way = 0; way < NUM_WAY; way++) {
+    const auto idx = umon_lru_index(cpu, sample, way);
+    auto& pos = umon_lru_position.at(idx);
+    if (pos < old_pos) {
+      pos++;
     }
   }
 
-  for (long way = 0; way < NUM_WAY; ++way) {
-    const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
-    if (ucp_atd_valid.at(idx) != 0 && ucp_atd_lru.at(idx) < NUM_WAY - 1) {
-      ucp_atd_lru.at(idx)++;
-    }
-  }
-
-  const auto victim_idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(victim_way));
-  ucp_atd_valid.at(victim_idx) = 1;
-  ucp_atd_tags.at(victim_idx) = tag;
-  ucp_atd_lru.at(victim_idx) = 0;
+  const uint32_t touched_way = (hit_way >= 0) ? static_cast<uint32_t>(hit_way) : victim_way;
+  const auto touched_idx = umon_tag_index(cpu, sample, touched_way);
+  umon_tags.at(touched_idx) = address;
+  umon_valid.at(touched_idx) = true;
+  umon_lru_position.at(touched_idx) = 0;
 }
 
 void CACHE::recompute_ucp_partition()
@@ -298,12 +300,13 @@ void CACHE::recompute_ucp_partition()
     uint64_t best_gain = 0;
 
     for (uint32_t c = 0; c < partition_cpu_count; c++) {
-      if (new_partition.at(c) >= NUM_WAY) {
+      const auto current_ways = new_partition.at(c);
+      if (current_ways >= NUM_WAY) {
         continue;
       }
 
-      const auto next_way = new_partition.at(c);
-      const auto gain = ucp_hit_position.at(utility_index(c, next_way - 1));
+      const auto idx = utility_index(c, current_ways);
+      const auto gain = (idx < ucp_way_utility.size()) ? ucp_way_utility.at(idx) : 0;
 
       if (gain >= best_gain) {
         best_gain = gain;
@@ -317,6 +320,16 @@ void CACHE::recompute_ucp_partition()
 
   current_partition = new_partition;
   repartition_count++;
+
+  static int ucp_debug_prints = 0;
+  if (NAME == "LLC" && ucp_debug_prints < 20) {
+    fmt::print("[UCP partition] ");
+    for (uint32_t c = 0; c < partition_cpu_count; c++) {
+      fmt::print("{}{}", current_partition.at(c), (c + 1 == partition_cpu_count) ? "" : ",");
+    }
+    fmt::print("\n");
+    ucp_debug_prints++;
+  }
 }
 
 void CACHE::maybe_repartition()
@@ -328,9 +341,11 @@ void CACHE::maybe_repartition()
   ucp_epoch_counter++;
   llc_access_counter++;
 
-  if (repartition_interval != 0 && ucp_epoch_counter >= repartition_interval) {
+  const auto current_cycle = static_cast<uint64_t>((current_time.time_since_epoch()) / clock_period);
+  if (repartition_interval != 0 && current_cycle >= next_repartition_cycle) {
     recompute_ucp_partition();
     decay_ucp_epoch();
+    next_repartition_cycle = current_cycle + repartition_interval;
   }
 }
 
@@ -526,9 +541,10 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
 
   // update replacement policy
   const auto way_idx = std::distance(set_begin, way);
-  const auto set_idx = get_set_index(handle_pkt.address);
-  impl_update_replacement_state(handle_pkt.cpu, set_idx, way_idx, module_address(handle_pkt), handle_pkt.ip, {}, handle_pkt.type, hit);
-  observe_ucp_access(handle_pkt.cpu, set_idx, handle_pkt.address, handle_pkt.type);
+  impl_update_replacement_state(handle_pkt.cpu, get_set_index(handle_pkt.address), way_idx, module_address(handle_pkt), handle_pkt.ip, {}, handle_pkt.type,
+                                hit);
+
+  update_ucp_on_access(handle_pkt.cpu, get_set_index(handle_pkt.address), handle_pkt.address, handle_pkt.type);
   maybe_repartition();
 
   if (hit) {
@@ -586,8 +602,6 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
   mshr_type to_allocate{handle_pkt, current_time};
 
   cpu = handle_pkt.cpu;
-  observe_ucp_access(handle_pkt.cpu, get_set_index(handle_pkt.address), handle_pkt.address, handle_pkt.type);
-  maybe_repartition();
 
   auto mshr_pkt = mshr_and_forward_packet(handle_pkt);
 
@@ -627,6 +641,9 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
   }
 
   sim_stats.misses.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
+
+  update_ucp_on_access(handle_pkt.cpu, get_set_index(handle_pkt.address), handle_pkt.address, handle_pkt.type);
+  maybe_repartition();
 
   return true;
 }
