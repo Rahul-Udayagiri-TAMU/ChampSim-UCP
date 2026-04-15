@@ -149,9 +149,12 @@ public:
   void initialize_equal_partition(uint32_t num_cpus);
 
   std::size_t utility_index(uint32_t cpu, uint32_t way_budget) const;
+  std::size_t atd_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const;
+  bool is_ucp_sampled_set(long set) const;
+  uint32_t sampled_set_index(long set) const;
 
-  void reset_ucp_epoch();
-  void update_ucp_on_fill(uint32_t cpu, long set, long way);
+  void decay_ucp_epoch();
+  void observe_ucp_access(uint32_t req_cpu, long set, champsim::address full_addr, access_type type);
   void maybe_repartition();
   void recompute_ucp_partition();
 
@@ -170,8 +173,12 @@ public:
   // Flattened indexing: set * partition_cpu_count + cpu
   std::vector<uint32_t> set_core_occupancy;
 
-  std::vector<uint64_t> ucp_way_utility;
-  std::vector<uint64_t> ucp_fill_count;
+  std::vector<uint64_t> ucp_hit_position;
+  std::vector<uint64_t> ucp_atd_tags;
+  std::vector<uint8_t> ucp_atd_valid;
+  std::vector<uint8_t> ucp_atd_lru;
+  uint32_t ucp_num_sampled_sets = 0;
+  uint32_t ucp_sample_stride = 1;
   uint64_t ucp_epoch_counter = 0;
 
   uint64_t llc_access_counter = 0;
@@ -390,12 +397,20 @@ partition_cpu_count = (enable_static_partitioning || enable_ucp)
       new_partition.assign(partition_cpu_count, NUM_WAY);
     }
 
-    ucp_way_utility.assign(static_cast<std::size_t>(partition_cpu_count * NUM_WAY), 0);
-    ucp_fill_count.assign(static_cast<std::size_t>(partition_cpu_count), 0);
+    ucp_num_sampled_sets = enable_ucp ? static_cast<uint32_t>(std::min<std::size_t>(NUM_SET, 32)) : 0;
+    ucp_sample_stride = (enable_ucp && ucp_num_sampled_sets != 0) ? static_cast<uint32_t>(std::max<std::size_t>(1, NUM_SET / ucp_num_sampled_sets)) : 1;
+    if (enable_ucp && ucp_num_sampled_sets != 0) {
+      ucp_num_sampled_sets = static_cast<uint32_t>((NUM_SET + ucp_sample_stride - 1) / ucp_sample_stride);
+    }
+
+    ucp_hit_position.assign(static_cast<std::size_t>(partition_cpu_count * NUM_WAY), 0);
+    ucp_atd_tags.assign(static_cast<std::size_t>(partition_cpu_count * ucp_num_sampled_sets * NUM_WAY), 0);
+    ucp_atd_valid.assign(static_cast<std::size_t>(partition_cpu_count * ucp_num_sampled_sets * NUM_WAY), 0);
+    ucp_atd_lru.assign(static_cast<std::size_t>(partition_cpu_count * ucp_num_sampled_sets * NUM_WAY), 0);
     ucp_epoch_counter = 0;
 
     llc_access_counter = 0;
-    repartition_interval = 1000000;
+    repartition_interval = 5000000;
     repartition_count = 0;
   }
 

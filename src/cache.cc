@@ -46,8 +46,10 @@ CACHE::CACHE(CACHE&& other)
       enable_static_partitioning(other.enable_static_partitioning), enable_ucp(other.enable_ucp),
       partition_cpu_count(other.partition_cpu_count), current_partition(std::move(other.current_partition)),
       new_partition(std::move(other.new_partition)), line_owner_cpu(std::move(other.line_owner_cpu)),
-      set_core_occupancy(std::move(other.set_core_occupancy)), ucp_way_utility(std::move(other.ucp_way_utility)),
-      ucp_fill_count(std::move(other.ucp_fill_count)), ucp_epoch_counter(other.ucp_epoch_counter),
+      set_core_occupancy(std::move(other.set_core_occupancy)), ucp_hit_position(std::move(other.ucp_hit_position)),
+      ucp_atd_tags(std::move(other.ucp_atd_tags)), ucp_atd_valid(std::move(other.ucp_atd_valid)),
+      ucp_atd_lru(std::move(other.ucp_atd_lru)), ucp_num_sampled_sets(other.ucp_num_sampled_sets),
+      ucp_sample_stride(other.ucp_sample_stride), ucp_epoch_counter(other.ucp_epoch_counter),
       llc_access_counter(other.llc_access_counter), repartition_interval(other.repartition_interval), repartition_count(other.repartition_count),
 
       pref_module_pimpl(std::move(other.pref_module_pimpl)), repl_module_pimpl(std::move(other.repl_module_pimpl))
@@ -96,8 +98,12 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
   this->new_partition = std::move(other.new_partition);
   this->line_owner_cpu = std::move(other.line_owner_cpu);
   this->set_core_occupancy = std::move(other.set_core_occupancy);
-  this->ucp_way_utility = std::move(other.ucp_way_utility);
-  this->ucp_fill_count = std::move(other.ucp_fill_count);
+  this->ucp_hit_position = std::move(other.ucp_hit_position);
+  this->ucp_atd_tags = std::move(other.ucp_atd_tags);
+  this->ucp_atd_valid = std::move(other.ucp_atd_valid);
+  this->ucp_atd_lru = std::move(other.ucp_atd_lru);
+  this->ucp_num_sampled_sets = other.ucp_num_sampled_sets;
+  this->ucp_sample_stride = other.ucp_sample_stride;
   this->ucp_epoch_counter = other.ucp_epoch_counter;
   this->llc_access_counter = other.llc_access_counter;
   this->repartition_interval = other.repartition_interval;
@@ -132,9 +138,25 @@ std::size_t CACHE::occupancy_index(long set, uint32_t cpu) const
   return static_cast<std::size_t>(set * partition_cpu_count + cpu);
 }
 
+
 std::size_t CACHE::utility_index(uint32_t cpu, uint32_t way_budget) const
 {
   return static_cast<std::size_t>(cpu * NUM_WAY + way_budget);
+}
+
+std::size_t CACHE::atd_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const
+{
+  return (static_cast<std::size_t>(cpu) * ucp_num_sampled_sets + sampled_set) * NUM_WAY + way;
+}
+
+bool CACHE::is_ucp_sampled_set(long set) const
+{
+  return ucp_enabled() && ucp_num_sampled_sets != 0 && set >= 0 && (static_cast<uint32_t>(set) % ucp_sample_stride) == 0;
+}
+
+uint32_t CACHE::sampled_set_index(long set) const
+{
+  return static_cast<uint32_t>(set) / ucp_sample_stride;
 }
 
 int32_t CACHE::get_line_owner(long set, long way) const
@@ -182,28 +204,84 @@ void CACHE::initialize_equal_partition(uint32_t num_cpus)
   new_partition = current_partition;
 }
 
-void CACHE::reset_ucp_epoch()
+void CACHE::decay_ucp_epoch()
 {
-  std::fill(std::begin(ucp_way_utility), std::end(ucp_way_utility), 0);
-  std::fill(std::begin(ucp_fill_count), std::end(ucp_fill_count), 0);
+  for (auto& x : ucp_hit_position) {
+    x >>= 1;
+  }
   ucp_epoch_counter = 0;
 }
 
-void CACHE::update_ucp_on_fill(uint32_t cpu, long set, long way)
+void CACHE::observe_ucp_access(uint32_t req_cpu, long set, champsim::address full_addr, access_type type)
 {
-  (void)way;
-
-  if (!ucp_enabled()) {
+  if (!ucp_enabled() || req_cpu >= partition_cpu_count || !is_ucp_sampled_set(set) || type == access_type::WRITE) {
     return;
   }
 
-  if (cpu < partition_cpu_count) {
-    ucp_fill_count.at(cpu)++;
-    const auto occ = get_set_core_occupancy(set, cpu);
-    if (occ > 0 && occ <= NUM_WAY) {
-      ucp_way_utility.at(utility_index(cpu, occ - 1))++;
+  const auto sampled_set = sampled_set_index(set);
+  if (sampled_set >= ucp_num_sampled_sets) {
+    return;
+  }
+
+  const auto tag = full_addr.slice_upper(OFFSET_BITS).to<uint64_t>();
+
+  long hit_way = -1;
+  for (long way = 0; way < NUM_WAY; ++way) {
+    const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
+    if (ucp_atd_valid.at(idx) != 0 && ucp_atd_tags.at(idx) == tag) {
+      hit_way = way;
+      break;
     }
   }
+
+  if (hit_way >= 0) {
+    const auto pos = ucp_atd_lru.at(atd_index(req_cpu, sampled_set, static_cast<uint32_t>(hit_way)));
+    if (pos < NUM_WAY) {
+      ucp_hit_position.at(utility_index(req_cpu, pos))++;
+    }
+
+    for (long way = 0; way < NUM_WAY; ++way) {
+      const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
+      if (ucp_atd_valid.at(idx) != 0 && ucp_atd_lru.at(idx) < pos) {
+        ucp_atd_lru.at(idx)++;
+      }
+    }
+    ucp_atd_lru.at(atd_index(req_cpu, sampled_set, static_cast<uint32_t>(hit_way))) = 0;
+    return;
+  }
+
+  long victim_way = -1;
+  for (long way = 0; way < NUM_WAY; ++way) {
+    const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
+    if (ucp_atd_valid.at(idx) == 0) {
+      victim_way = way;
+      break;
+    }
+  }
+
+  if (victim_way < 0) {
+    victim_way = 0;
+    uint8_t max_lru = 0;
+    for (long way = 0; way < NUM_WAY; ++way) {
+      const auto lru = ucp_atd_lru.at(atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way)));
+      if (lru >= max_lru) {
+        max_lru = lru;
+        victim_way = way;
+      }
+    }
+  }
+
+  for (long way = 0; way < NUM_WAY; ++way) {
+    const auto idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(way));
+    if (ucp_atd_valid.at(idx) != 0 && ucp_atd_lru.at(idx) < NUM_WAY - 1) {
+      ucp_atd_lru.at(idx)++;
+    }
+  }
+
+  const auto victim_idx = atd_index(req_cpu, sampled_set, static_cast<uint32_t>(victim_way));
+  ucp_atd_valid.at(victim_idx) = 1;
+  ucp_atd_tags.at(victim_idx) = tag;
+  ucp_atd_lru.at(victim_idx) = 0;
 }
 
 void CACHE::recompute_ucp_partition()
@@ -224,8 +302,8 @@ void CACHE::recompute_ucp_partition()
         continue;
       }
 
-      const auto idx = utility_index(c, new_partition.at(c));
-      const auto gain = (idx < ucp_way_utility.size()) ? ucp_way_utility.at(idx) : 0;
+      const auto next_way = new_partition.at(c);
+      const auto gain = ucp_hit_position.at(utility_index(c, next_way - 1));
 
       if (gain >= best_gain) {
         best_gain = gain;
@@ -239,15 +317,6 @@ void CACHE::recompute_ucp_partition()
 
   current_partition = new_partition;
   repartition_count++;
-
-  static int ucp_debug_prints = 0;
-  if (NAME == "LLC" && ucp_debug_prints < 20) {
-    for (uint32_t c = 0; c < partition_cpu_count; c++) {
-      fmt::print("{}{}", current_partition.at(c), (c + 1 == partition_cpu_count) ? "" : ",");
-    }
-    fmt::print("\n");
-    ucp_debug_prints++;
-  }
 }
 
 void CACHE::maybe_repartition()
@@ -259,9 +328,9 @@ void CACHE::maybe_repartition()
   ucp_epoch_counter++;
   llc_access_counter++;
 
-  if (repartition_interval != 0 && (ucp_epoch_counter % repartition_interval) == 0) {
+  if (repartition_interval != 0 && ucp_epoch_counter >= repartition_interval) {
     recompute_ucp_partition();
-    reset_ucp_epoch();
+    decay_ucp_epoch();
   }
 }
 
@@ -418,8 +487,6 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     if (partitioning_enabled()) {
       set_line_owner(set_idx, way_idx, static_cast<int32_t>(fill_mshr.cpu));
       inc_set_core_occupancy(set_idx, fill_mshr.cpu);
-      update_ucp_on_fill(fill_mshr.cpu, set_idx, way_idx);
-      maybe_repartition();
     }
   }
 
@@ -459,8 +526,10 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
 
   // update replacement policy
   const auto way_idx = std::distance(set_begin, way);
-  impl_update_replacement_state(handle_pkt.cpu, get_set_index(handle_pkt.address), way_idx, module_address(handle_pkt), handle_pkt.ip, {}, handle_pkt.type,
-                                hit);
+  const auto set_idx = get_set_index(handle_pkt.address);
+  impl_update_replacement_state(handle_pkt.cpu, set_idx, way_idx, module_address(handle_pkt), handle_pkt.ip, {}, handle_pkt.type, hit);
+  observe_ucp_access(handle_pkt.cpu, set_idx, handle_pkt.address, handle_pkt.type);
+  maybe_repartition();
 
   if (hit) {
     sim_stats.hits.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
@@ -517,6 +586,8 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
   mshr_type to_allocate{handle_pkt, current_time};
 
   cpu = handle_pkt.cpu;
+  observe_ucp_access(handle_pkt.cpu, get_set_index(handle_pkt.address), handle_pkt.address, handle_pkt.type);
+  maybe_repartition();
 
   auto mshr_pkt = mshr_and_forward_packet(handle_pkt);
 

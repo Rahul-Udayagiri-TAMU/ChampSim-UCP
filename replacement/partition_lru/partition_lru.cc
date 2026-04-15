@@ -79,4 +79,3 @@ void partition_lru::update_replacement_state(uint32_t triggering_cpu, long set, 
     last_used_cycles.at(static_cast<std::size_t>(set * NUM_WAY + way)) = cycle++;
   }
 }
-
