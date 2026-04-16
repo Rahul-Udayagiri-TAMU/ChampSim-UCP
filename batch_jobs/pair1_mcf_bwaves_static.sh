@@ -1,5 +1,4 @@
 #!/bin/bash
-
 #SBATCH --job-name=p1_static
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=udayagirirahul7@tamu.edu
