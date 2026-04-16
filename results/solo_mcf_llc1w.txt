@@ -9,30 +9,10 @@ Page size: 4096
 Off-chip DRAM Size: 16 GiB Channels: 1 Width: 64-bit Data Rate: 3205 MT/s
 Warmup finished CPU 0 instructions: 1000003 cycles: 395244 cumulative IPC: 2.53 (Simulation time: 00 hr 00 min 05 sec)
 Warmup complete CPU 0 instructions: 1000003 cycles: 395244 cumulative IPC: 2.53 (Simulation time: 00 hr 00 min 05 sec)
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-Heartbeat CPU 0 instructions: 10000000 cycles: 50676760 heartbeat IPC: 0.1973 cumulative IPC: 0.179 (Simulation time: 00 hr 04 min 16 sec)
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-[UCP partition] 1
-Heartbeat CPU 0 instructions: 20000002 cycles: 107037100 heartbeat IPC: 0.1774 cumulative IPC: 0.1782 (Simulation time: 00 hr 09 min 00 sec)
-Simulation finished CPU 0 instructions: 20000002 cycles: 111140535 cumulative IPC: 0.18 (Simulation time: 00 hr 09 min 23 sec)
-Simulation complete CPU 0 instructions: 20000002 cycles: 111140535 cumulative IPC: 0.18 (Simulation time: 00 hr 09 min 23 sec)
+Heartbeat CPU 0 instructions: 10000000 cycles: 50676760 heartbeat IPC: 0.1973 cumulative IPC: 0.179 (Simulation time: 00 hr 04 min 20 sec)
+Heartbeat CPU 0 instructions: 20000002 cycles: 107037100 heartbeat IPC: 0.1774 cumulative IPC: 0.1782 (Simulation time: 00 hr 09 min 09 sec)
+Simulation finished CPU 0 instructions: 20000002 cycles: 111140535 cumulative IPC: 0.18 (Simulation time: 00 hr 09 min 32 sec)
+Simulation complete CPU 0 instructions: 20000002 cycles: 111140535 cumulative IPC: 0.18 (Simulation time: 00 hr 09 min 32 sec)
 
 ChampSim completed all CPUs
 

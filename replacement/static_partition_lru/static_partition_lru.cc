@@ -1,18 +1,18 @@
-#include "partition_lru.h"
+#include "static_partition_lru.h"
 
 #include <algorithm>
 #include <cassert>
 #include <vector>
 
-partition_lru::partition_lru(CACHE* cache) : partition_lru(cache, cache->NUM_SET, cache->NUM_WAY) {}
+static_partition_lru::static_partition_lru(CACHE* cache) : static_partition_lru(cache, cache->NUM_SET, cache->NUM_WAY) {}
 
-partition_lru::partition_lru(CACHE* cache, long sets, long ways)
+static_partition_lru::static_partition_lru(CACHE* cache, long sets, long ways)
     : replacement(cache), NUM_WAY(ways), last_used_cycles(static_cast<std::size_t>(sets * ways), 0)
 {
-  cache->set_ucp_mode();
+  cache->set_static_partitioning_mode();
 }
 
-long partition_lru::find_victim(uint32_t triggering_cpu, uint64_t instr_id, long set, const champsim::cache_block* current_set, champsim::address ip,
+long static_partition_lru::find_victim(uint32_t triggering_cpu, uint64_t instr_id, long set, const champsim::cache_block* current_set, champsim::address ip,
                                 champsim::address full_addr, access_type type)
 {
   auto begin = std::next(std::begin(last_used_cycles), set * NUM_WAY);
@@ -67,13 +67,13 @@ long partition_lru::find_victim(uint32_t triggering_cpu, uint64_t instr_id, long
   return best_way;
 }
 
-void partition_lru::replacement_cache_fill(uint32_t triggering_cpu, long set, long way, champsim::address full_addr, champsim::address ip,
+void static_partition_lru::replacement_cache_fill(uint32_t triggering_cpu, long set, long way, champsim::address full_addr, champsim::address ip,
                                            champsim::address victim_addr, access_type type)
 {
   last_used_cycles.at(static_cast<std::size_t>(set * NUM_WAY + way)) = cycle++;
 }
 
-void partition_lru::update_replacement_state(uint32_t triggering_cpu, long set, long way, champsim::address full_addr, champsim::address ip,
+void static_partition_lru::update_replacement_state(uint32_t triggering_cpu, long set, long way, champsim::address full_addr, champsim::address ip,
                                              champsim::address victim_addr, access_type type, uint8_t hit)
 {
   if (hit && access_type{type} != access_type::WRITE) {

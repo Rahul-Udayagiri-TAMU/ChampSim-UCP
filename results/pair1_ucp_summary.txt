@@ -1,0 +1,9 @@
+CPU 1 cumulative IPC: 1.95 instructions: 140587782 cycles: 72078773
+CPU 0 cumulative IPC: 0.2775 instructions: 20000002 cycles: 72078773
+cpu0->LLC LOAD         ACCESS:     497203 HIT:     239065 MISS:     258138 MSHR_MERGE:          0
+cpu1->LLC LOAD         ACCESS:      10086 HIT:          0 MISS:      10086 MSHR_MERGE:          0
+Region of Interest Statistics
+CPU 1 cumulative IPC: 1.771 instructions: 20000001 cycles: 11291571
+CPU 0 cumulative IPC: 0.2775 instructions: 20000002 cycles: 72078773
+cpu0->LLC LOAD         ACCESS:     497203 HIT:     239065 MISS:     258138 MSHR_MERGE:          0
+cpu1->LLC LOAD         ACCESS:      10086 HIT:          0 MISS:      10086 MSHR_MERGE:          0
