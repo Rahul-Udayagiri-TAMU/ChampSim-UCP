@@ -1,0 +1,3 @@
+Running LRU mix5
+Running LRU mix6
+slurmstepd: error: *** JOB 350815 ON n01-zeus CANCELLED AT 2026-04-05T13:06:27 DUE TO TIME LIMIT ***

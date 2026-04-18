@@ -9,6 +9,7 @@ partition_lru::partition_lru(CACHE* cache) : partition_lru(cache, cache->NUM_SET
 partition_lru::partition_lru(CACHE* cache, long sets, long ways)
     : replacement(cache), NUM_WAY(ways), last_used_cycles(static_cast<std::size_t>(sets * ways), 0)
 {
+  cache->set_ucp_mode();
 }
 
 long partition_lru::find_victim(uint32_t triggering_cpu, uint64_t instr_id, long set, const champsim::cache_block* current_set, champsim::address ip,
@@ -79,4 +80,3 @@ void partition_lru::update_replacement_state(uint32_t triggering_cpu, long set, 
     last_used_cycles.at(static_cast<std::size_t>(set * NUM_WAY + way)) = cycle++;
   }
 }
-

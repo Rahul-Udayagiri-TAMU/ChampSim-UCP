@@ -147,6 +147,71 @@ public:
 
   bool cpu_has_room_in_set(long set, uint32_t cpu) const;
   void initialize_equal_partition(uint32_t num_cpus);
+  void configure_partitioning(bool static_mode, bool ucp_mode)
+  {
+    enable_static_partitioning = static_mode;
+    enable_ucp = ucp_mode;
+
+    partition_cpu_count = (enable_static_partitioning || enable_ucp)
+                            ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size()))
+                            : 1;
+
+    set_core_occupancy.assign(static_cast<std::size_t>(NUM_SET * partition_cpu_count), 0);
+
+    if (enable_static_partitioning || enable_ucp) {
+      initialize_equal_partition(partition_cpu_count);
+    } else {
+      current_partition.assign(partition_cpu_count, NUM_WAY);
+      new_partition.assign(partition_cpu_count, NUM_WAY);
+    }
+
+    ucp_way_utility.assign(static_cast<std::size_t>(partition_cpu_count * NUM_WAY), 0);
+
+    ucp_sampled_set_count = static_cast<uint32_t>(std::min<std::size_t>(32, NUM_SET));
+    ucp_sampled_set_stride = static_cast<uint32_t>(std::max<std::size_t>(1, NUM_SET / std::max<std::size_t>(1, ucp_sampled_set_count)));
+    const auto umon_entries = static_cast<std::size_t>(partition_cpu_count * ucp_sampled_set_count * NUM_WAY);
+    umon_tags.assign(umon_entries, champsim::address{});
+    umon_valid.assign(umon_entries, false);
+    umon_lru_position.assign(umon_entries, 0);
+    for (uint32_t cpu_idx = 0; cpu_idx < partition_cpu_count; cpu_idx++) {
+      for (uint32_t sample_idx = 0; sample_idx < ucp_sampled_set_count; sample_idx++) {
+        for (uint32_t way_idx = 0; way_idx < NUM_WAY; way_idx++) {
+          umon_lru_position.at(static_cast<std::size_t>((cpu_idx * ucp_sampled_set_count + sample_idx) * NUM_WAY + way_idx)) = way_idx;
+        }
+      }
+    }
+
+    ucp_epoch_counter = 0;
+    llc_access_counter = 0;
+    repartition_interval = 5000000;
+    next_repartition_cycle = repartition_interval;
+    repartition_count = 0;
+  }
+  void set_static_partitioning_mode()
+  {
+    if (NAME == "LLC") {
+      configure_partitioning(true, false);
+    }
+  }
+  void set_ucp_mode()
+  {
+    if (NAME == "LLC") {
+      configure_partitioning(false, true);
+    }
+  }
+
+  std::size_t utility_index(uint32_t cpu, uint32_t way_budget) const;
+  std::size_t umon_tag_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const;
+  std::size_t umon_lru_index(uint32_t cpu, uint32_t sampled_set, uint32_t way) const;
+
+  bool is_sampled_set(long set) const;
+  uint32_t sampled_set_index(long set) const;
+
+  void reset_ucp_epoch();
+  void decay_ucp_epoch();
+  void update_ucp_on_access(uint32_t cpu, long set, champsim::address address, access_type type);
+  void maybe_repartition();
+  void recompute_ucp_partition();
 
   // Partitioning state
   bool enable_static_partitioning = false;
@@ -163,8 +228,18 @@ public:
   // Flattened indexing: set * partition_cpu_count + cpu
   std::vector<uint32_t> set_core_occupancy;
 
+  std::vector<uint64_t> ucp_way_utility;
+
+  uint32_t ucp_sampled_set_count = 32;
+  uint32_t ucp_sampled_set_stride = 1;
+  std::vector<champsim::address> umon_tags;
+  std::vector<bool> umon_valid;
+  std::vector<uint32_t> umon_lru_position;
+
+  uint64_t ucp_epoch_counter = 0;
   uint64_t llc_access_counter = 0;
   uint64_t repartition_interval = 0;
+  uint64_t next_repartition_cycle = 0;
   uint64_t repartition_count = 0;
 
   std::pair<set_type::iterator, set_type::iterator> get_set_span(champsim::address address);
@@ -363,23 +438,33 @@ public:
   {
     line_owner_cpu.assign(static_cast<std::size_t>(NUM_SET * NUM_WAY), -1);
 
-    enable_static_partitioning = (NAME == "LLC");
-    enable_ucp = false;
-
-    partition_cpu_count = enable_static_partitioning ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size())) : 1;
-
-    set_core_occupancy.assign(static_cast<std::size_t>(NUM_SET * partition_cpu_count), 0);
-
-    if (enable_static_partitioning) {
-      initialize_equal_partition(partition_cpu_count);
-    } else {
+    if (!enable_static_partitioning && !enable_ucp) {
+      partition_cpu_count = 1;
       current_partition.assign(partition_cpu_count, NUM_WAY);
       new_partition.assign(partition_cpu_count, NUM_WAY);
-    }
+      set_core_occupancy.assign(static_cast<std::size_t>(NUM_SET * partition_cpu_count), 0);
+      ucp_way_utility.assign(static_cast<std::size_t>(partition_cpu_count * NUM_WAY), 0);
 
-    llc_access_counter = 0;
-    repartition_interval = 0;
-    repartition_count = 0;
+      ucp_sampled_set_count = static_cast<uint32_t>(std::min<std::size_t>(32, NUM_SET));
+      ucp_sampled_set_stride = static_cast<uint32_t>(std::max<std::size_t>(1, NUM_SET / std::max<std::size_t>(1, ucp_sampled_set_count)));
+      const auto umon_entries = static_cast<std::size_t>(partition_cpu_count * ucp_sampled_set_count * NUM_WAY);
+      umon_tags.assign(umon_entries, champsim::address{});
+      umon_valid.assign(umon_entries, false);
+      umon_lru_position.assign(umon_entries, 0);
+      for (uint32_t cpu_idx = 0; cpu_idx < partition_cpu_count; cpu_idx++) {
+        for (uint32_t sample_idx = 0; sample_idx < ucp_sampled_set_count; sample_idx++) {
+          for (uint32_t way_idx = 0; way_idx < NUM_WAY; way_idx++) {
+            umon_lru_position.at(static_cast<std::size_t>((cpu_idx * ucp_sampled_set_count + sample_idx) * NUM_WAY + way_idx)) = way_idx;
+          }
+        }
+      }
+
+      ucp_epoch_counter = 0;
+      llc_access_counter = 0;
+      repartition_interval = 5000000;
+      next_repartition_cycle = repartition_interval;
+      repartition_count = 0;
+    }
   }
 
   CACHE(const CACHE&) = delete;
