@@ -4,10 +4,6 @@
   "dependencies": [
     "cli11",
     "nlohmann-json",
-    "fmt",
-    "bzip2",
-    "liblzma",
-    "zlib",
-    "catch2"
+    "fmt"
   ]
 }

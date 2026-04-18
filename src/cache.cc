@@ -48,6 +48,7 @@ CACHE::CACHE(CACHE&& other)
       new_partition(std::move(other.new_partition)), line_owner_cpu(std::move(other.line_owner_cpu)),
       set_core_occupancy(std::move(other.set_core_occupancy)), llc_access_counter(other.llc_access_counter),
       repartition_interval(other.repartition_interval), repartition_count(other.repartition_count),
+      num_atd_sets(other.num_atd_sets), atd_stacks(std::move(other.atd_stacks)), atd_hits(std::move(other.atd_hits)),
 
       pref_module_pimpl(std::move(other.pref_module_pimpl)), repl_module_pimpl(std::move(other.repl_module_pimpl))
 {
@@ -98,6 +99,9 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
   this->llc_access_counter = other.llc_access_counter;
   this->repartition_interval = other.repartition_interval;
   this->repartition_count = other.repartition_count;
+  this->num_atd_sets = other.num_atd_sets;
+  this->atd_stacks = std::move(other.atd_stacks);
+  this->atd_hits = std::move(other.atd_hits);
 
   this->pref_module_pimpl = std::move(other.pref_module_pimpl);
   this->repl_module_pimpl = std::move(other.repl_module_pimpl);
@@ -173,6 +177,111 @@ void CACHE::initialize_equal_partition(uint32_t num_cpus)
   new_partition = current_partition;
 }
 
+// -----------------------------------------------------------------------
+// ATD helpers
+// -----------------------------------------------------------------------
+
+bool CACHE::is_atd_set(long set_idx) const
+{
+  return (set_idx % static_cast<long>(ATD_SAMPLE_RATE)) == 0;
+}
+
+// Probe the ATD for cpu on the given set. addr is the full (block-aligned)
+// cache address.  Updates atd_hits[cpu][k] for every k where the line
+// would have been a hit.
+void CACHE::atd_probe(uint32_t cpu, long set_idx, champsim::address addr)
+{
+  if (!enable_ucp || atd_stacks.empty())
+    return;
+  if (cpu >= partition_cpu_count)
+    return;
+
+  // Map real set → ATD set index
+  long atd_set = set_idx / static_cast<long>(ATD_SAMPLE_RATE);
+  if (atd_set >= static_cast<long>(num_atd_sets))
+    return;
+
+  auto& stack = atd_stacks[cpu][static_cast<std::size_t>(atd_set)];
+
+  // Search for addr in the stack
+  auto it = std::find(stack.begin(), stack.end(), addr);
+  if (it != stack.end()) {
+    // Hit: position in LRU stack (0 = MRU)
+    long pos = std::distance(stack.begin(), it);
+    // A cache with k > pos ways would have hit, so credit all k > pos
+    for (long k = pos + 1; k <= static_cast<long>(NUM_WAY); ++k) {
+      atd_hits[cpu][static_cast<std::size_t>(k)]++;
+    }
+    // Move to MRU position (LRU update)
+    std::move_backward(stack.begin(), it, std::next(it));
+    stack.front() = addr;
+  } else {
+    // Miss: insert at MRU, evict LRU (shift everything down)
+    std::move_backward(stack.begin(), std::prev(stack.end()), stack.end());
+    stack.front() = addr;
+    // No hit credit given
+  }
+}
+
+// Lookahead algorithm (Qureshi & Patt 2006).
+// Greedily assigns one way at a time to the CPU with the highest marginal
+// utility until all NUM_WAY ways are distributed.
+void CACHE::run_ucp_repartition()
+{
+  if (!enable_ucp || partition_cpu_count <= 1)
+    return;
+
+  // marginal_utility[cpu][k] = atd_hits[cpu][k] - atd_hits[cpu][k-1]
+  // i.e., additional hits gained by giving this CPU a k-th way.
+  auto marginal = [&](uint32_t c, uint32_t k) -> uint64_t {
+    if (k == 0)
+      return 0;
+    return atd_hits[c][k] - atd_hits[c][k - 1];
+  };
+
+  // Start: each CPU gets 0 ways
+  std::vector<uint32_t> alloc(partition_cpu_count, 0);
+
+  for (uint32_t way = 0; way < static_cast<uint32_t>(NUM_WAY); ++way) {
+    // Find the CPU that benefits most from one extra way
+    uint32_t best_cpu = 0;
+    uint64_t best_gain = 0;
+    for (uint32_t c = 0; c < partition_cpu_count; ++c) {
+      uint32_t next_way = alloc[c] + 1;
+      if (next_way > static_cast<uint32_t>(NUM_WAY))
+        continue;
+      uint64_t gain = marginal(c, next_way);
+      if (gain > best_gain || (gain == best_gain && c < best_cpu)) {
+        best_gain = gain;
+        best_cpu = c;
+      }
+    }
+    alloc[best_cpu]++;
+  }
+
+  // Ensure every CPU gets at least 1 way (minimum protection)
+  for (uint32_t c = 0; c < partition_cpu_count; ++c) {
+    if (alloc[c] == 0) {
+      // Take a way from the CPU with the most ways
+      uint32_t donor = 0;
+      for (uint32_t d = 1; d < partition_cpu_count; ++d) {
+        if (alloc[d] > alloc[donor])
+          donor = d;
+      }
+      if (alloc[donor] > 1) {
+        alloc[donor]--;
+        alloc[c] = 1;
+      }
+    }
+  }
+
+  new_partition = alloc;
+  current_partition = new_partition;
+
+  // Reset ATD hit counters for the next interval
+  for (auto& v : atd_hits)
+    std::fill(v.begin(), v.end(), 0);
+}
 
 CACHE::tag_lookup_type::tag_lookup_type(const request_type& req, bool local_pref, bool skip)
     : address(req.address), v_address(req.v_address), data(req.data), ip(req.ip), instr_id(req.instr_id), pf_metadata(req.pf_metadata), cpu(req.cpu),
@@ -361,6 +470,17 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
   auto metadata_thru = handle_pkt.pf_metadata;
   if (should_activate_prefetcher(handle_pkt)) {
     metadata_thru = impl_prefetcher_cache_operate(module_address(handle_pkt), handle_pkt.ip, hit, useful_prefetch, handle_pkt.type, metadata_thru);
+  }
+
+  // UCP: probe ATD and periodically repartition
+  if (enable_ucp && is_atd_set(get_set_index(handle_pkt.address))) {
+    atd_probe(handle_pkt.cpu, get_set_index(handle_pkt.address), module_address(handle_pkt));
+    ++llc_access_counter;
+    if (repartition_interval > 0 && llc_access_counter >= repartition_interval) {
+      run_ucp_repartition();
+      llc_access_counter = 0;
+      ++repartition_count;
+    }
   }
 
   // update replacement policy

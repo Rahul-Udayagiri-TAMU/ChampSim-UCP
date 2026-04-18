@@ -167,6 +167,38 @@ public:
   uint64_t repartition_interval = 0;
   uint64_t repartition_count = 0;
 
+  // -----------------------------------------------------------------------
+  // Auxiliary Tag Directory (ATD) for Utility Cache Partitioning (UCP)
+  // -----------------------------------------------------------------------
+  // We sample 1/ATD_SAMPLE_RATE of all sets.  For each sampled set we
+  // maintain one independent LRU stack per CPU.  On every LLC access we
+  // probe the ATD stack for the requesting CPU and record at which stack
+  // position (0-based) the line was found; this directly gives us the
+  // utility curve hit[k] = # hits when the CPU is given k ways.
+  static constexpr uint32_t ATD_SAMPLE_RATE = 32; // probe 1 in 32 sets
+  static constexpr uint32_t ATD_MAX_CPUS     = 8;
+
+  // Per-CPU, per-sampled-set LRU stack (stores cache-line addresses)
+  // Outer dim: cpu [0..partition_cpu_count)
+  // Middle dim: sampled set index [0..num_atd_sets)
+  // Inner dim:  LRU stack, position 0 = MRU, position NUM_WAY-1 = LRU
+  std::vector<std::vector<std::vector<champsim::address>>> atd_stacks;
+
+  // Hit counters: atd_hits[cpu][k] = # times a hit occurred at stack
+  // position < k (i.e., if we had k ways).  Indexed 0..NUM_WAY inclusive.
+  std::vector<std::vector<uint64_t>> atd_hits;
+
+  uint32_t num_atd_sets = 0; // number of sampled sets
+
+  // Returns true if this set index is one of the ATD sampled sets
+  bool is_atd_set(long set_idx) const;
+
+  // Probe the ATD for a single access; records a hit/miss in atd_hits
+  void atd_probe(uint32_t cpu, long set_idx, champsim::address addr);
+
+  // Run the UCP lookahead algorithm and update current_partition
+  void run_ucp_repartition();
+
   std::pair<set_type::iterator, set_type::iterator> get_set_span(champsim::address address);
   [[nodiscard]] std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(champsim::address address) const;
   [[nodiscard]] long get_set_index(champsim::address address) const;
@@ -363,14 +395,14 @@ public:
   {
     line_owner_cpu.assign(static_cast<std::size_t>(NUM_SET * NUM_WAY), -1);
 
-    enable_static_partitioning = (NAME == "LLC");
-    enable_ucp = false;
+    enable_static_partitioning = false;
+    enable_ucp = (NAME == "LLC");
 
-    partition_cpu_count = enable_static_partitioning ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size())) : 1;
+    partition_cpu_count = enable_ucp ? static_cast<uint32_t>(std::max<std::size_t>(1, upper_levels.size())) : 1;
 
     set_core_occupancy.assign(static_cast<std::size_t>(NUM_SET * partition_cpu_count), 0);
 
-    if (enable_static_partitioning) {
+    if (enable_ucp) {
       initialize_equal_partition(partition_cpu_count);
     } else {
       current_partition.assign(partition_cpu_count, NUM_WAY);
@@ -378,8 +410,17 @@ public:
     }
 
     llc_access_counter = 0;
-    repartition_interval = 0;
+    repartition_interval = 5000000; // repartition every 5M LLC accesses
     repartition_count = 0;
+
+    // Initialize ATD structures when UCP is enabled
+    if (enable_ucp && partition_cpu_count > 1) {
+      num_atd_sets = std::max(1u, static_cast<uint32_t>(NUM_SET / ATD_SAMPLE_RATE));
+      atd_stacks.assign(partition_cpu_count,
+                        std::vector<std::vector<champsim::address>>(num_atd_sets,
+                                                                    std::vector<champsim::address>(NUM_WAY, champsim::address{})));
+      atd_hits.assign(partition_cpu_count, std::vector<uint64_t>(NUM_WAY + 1, 0));
+    }
   }
 
   CACHE(const CACHE&) = delete;
