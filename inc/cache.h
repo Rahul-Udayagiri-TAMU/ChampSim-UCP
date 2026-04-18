@@ -167,8 +167,8 @@ public:
 
     ucp_way_utility.assign(static_cast<std::size_t>(partition_cpu_count * NUM_WAY), 0);
 
-    ucp_sampled_set_count = static_cast<uint32_t>(std::min<std::size_t>(32, NUM_SET));
-    ucp_sampled_set_stride = static_cast<uint32_t>(std::max<std::size_t>(1, NUM_SET / std::max<std::size_t>(1, ucp_sampled_set_count)));
+    ucp_sampled_set_count = static_cast<uint32_t>(NUM_SET);
+    ucp_sampled_set_stride = 1;
     const auto umon_entries = static_cast<std::size_t>(partition_cpu_count * ucp_sampled_set_count * NUM_WAY);
     umon_tags.assign(umon_entries, champsim::address{});
     umon_valid.assign(umon_entries, false);
