@@ -18,7 +18,7 @@ Heartbeat CPU 0 instructions: 10000001 cycles: 19475921 heartbeat IPC: 0.5135 cu
 [UCP partition] 4
 [UCP partition] 4
 [UCP partition] 4
-Heartbeat CPU 0 instructions: 20000001 cycles: 41164604 heartbeat IPC: 0.4611 cumulative IPC: 0.4651 (Simulation time: 00 hr 03 min 57 sec)
+Heartbeat CPU 0 instructions: 20000001 cycles: 41164604 heartbeat IPC: 0.4611 cumulative IPC: 0.4651 (Simulation time: 00 hr 03 min 58 sec)
 Simulation finished CPU 0 instructions: 20000003 cycles: 42936829 cumulative IPC: 0.4658 (Simulation time: 00 hr 04 min 09 sec)
 Simulation complete CPU 0 instructions: 20000003 cycles: 42936829 cumulative IPC: 0.4658 (Simulation time: 00 hr 04 min 09 sec)
 

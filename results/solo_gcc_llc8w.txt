@@ -18,9 +18,9 @@ Heartbeat CPU 0 instructions: 10000001 cycles: 19473161 heartbeat IPC: 0.5135 cu
 [UCP partition] 8
 [UCP partition] 8
 [UCP partition] 8
-Heartbeat CPU 0 instructions: 20000001 cycles: 41166724 heartbeat IPC: 0.461 cumulative IPC: 0.4651 (Simulation time: 00 hr 03 min 55 sec)
-Simulation finished CPU 0 instructions: 20000003 cycles: 42951464 cumulative IPC: 0.4656 (Simulation time: 00 hr 04 min 07 sec)
-Simulation complete CPU 0 instructions: 20000003 cycles: 42951464 cumulative IPC: 0.4656 (Simulation time: 00 hr 04 min 07 sec)
+Heartbeat CPU 0 instructions: 20000001 cycles: 41166724 heartbeat IPC: 0.461 cumulative IPC: 0.4651 (Simulation time: 00 hr 03 min 56 sec)
+Simulation finished CPU 0 instructions: 20000003 cycles: 42951464 cumulative IPC: 0.4656 (Simulation time: 00 hr 04 min 08 sec)
+Simulation complete CPU 0 instructions: 20000003 cycles: 42951464 cumulative IPC: 0.4656 (Simulation time: 00 hr 04 min 08 sec)
 
 ChampSim completed all CPUs
 

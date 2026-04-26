@@ -10,10 +10,10 @@ Off-chip DRAM Size: 16 GiB Channels: 1 Width: 64-bit Data Rate: 3205 MT/s
 Warmup finished CPU 0 instructions: 1000000 cycles: 336669 cumulative IPC: 2.97 (Simulation time: 00 hr 00 min 04 sec)
 Warmup complete CPU 0 instructions: 1000000 cycles: 336669 cumulative IPC: 2.97 (Simulation time: 00 hr 00 min 04 sec)
 [UCP partition] 8
-Heartbeat CPU 0 instructions: 10000001 cycles: 9518870 heartbeat IPC: 1.051 cumulative IPC: 0.9802 (Simulation time: 00 hr 01 min 14 sec)
+Heartbeat CPU 0 instructions: 10000001 cycles: 9518870 heartbeat IPC: 1.051 cumulative IPC: 0.9802 (Simulation time: 00 hr 01 min 15 sec)
 [UCP partition] 8
 [UCP partition] 8
-Heartbeat CPU 0 instructions: 20000002 cycles: 18775172 heartbeat IPC: 1.08 cumulative IPC: 1.03 (Simulation time: 00 hr 02 min 30 sec)
+Heartbeat CPU 0 instructions: 20000002 cycles: 18775172 heartbeat IPC: 1.08 cumulative IPC: 1.03 (Simulation time: 00 hr 02 min 31 sec)
 Simulation finished CPU 0 instructions: 20000000 cycles: 19646323 cumulative IPC: 1.018 (Simulation time: 00 hr 02 min 40 sec)
 Simulation complete CPU 0 instructions: 20000000 cycles: 19646323 cumulative IPC: 1.018 (Simulation time: 00 hr 02 min 40 sec)
 

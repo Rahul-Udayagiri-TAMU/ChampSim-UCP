@@ -10,11 +10,9 @@ Off-chip DRAM Size: 16 GiB Channels: 1 Width: 64-bit Data Rate: 3205 MT/s
 Warmup finished CPU 0 instructions: 1000002 cycles: 256364 cumulative IPC: 3.901 (Simulation time: 00 hr 00 min 03 sec)
 Warmup complete CPU 0 instructions: 1000002 cycles: 256364 cumulative IPC: 3.901 (Simulation time: 00 hr 00 min 03 sec)
 Heartbeat CPU 0 instructions: 10000002 cycles: 4644925 heartbeat IPC: 2.153 cumulative IPC: 2.051 (Simulation time: 00 hr 00 min 37 sec)
-[UCP partition] 16
-[UCP partition] 16
-Heartbeat CPU 0 instructions: 20000005 cycles: 10381728 heartbeat IPC: 1.743 cumulative IPC: 1.876 (Simulation time: 00 hr 01 min 25 sec)
-Simulation finished CPU 0 instructions: 20000001 cycles: 10924844 cumulative IPC: 1.831 (Simulation time: 00 hr 01 min 33 sec)
-Simulation complete CPU 0 instructions: 20000001 cycles: 10924844 cumulative IPC: 1.831 (Simulation time: 00 hr 01 min 33 sec)
+Heartbeat CPU 0 instructions: 20000005 cycles: 10381728 heartbeat IPC: 1.743 cumulative IPC: 1.876 (Simulation time: 00 hr 01 min 26 sec)
+Simulation finished CPU 0 instructions: 20000001 cycles: 10924844 cumulative IPC: 1.831 (Simulation time: 00 hr 01 min 34 sec)
+Simulation complete CPU 0 instructions: 20000001 cycles: 10924844 cumulative IPC: 1.831 (Simulation time: 00 hr 01 min 34 sec)
 
 ChampSim completed all CPUs
 
