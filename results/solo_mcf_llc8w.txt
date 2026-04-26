@@ -17,7 +17,7 @@ Warmup complete CPU 0 instructions: 1000003 cycles: 395196 cumulative IPC: 2.53 
 [UCP partition] 8
 [UCP partition] 8
 [UCP partition] 8
-Heartbeat CPU 0 instructions: 10000000 cycles: 40025632 heartbeat IPC: 0.2498 cumulative IPC: 0.2271 (Simulation time: 00 hr 03 min 20 sec)
+Heartbeat CPU 0 instructions: 10000000 cycles: 40025632 heartbeat IPC: 0.2498 cumulative IPC: 0.2271 (Simulation time: 00 hr 03 min 19 sec)
 [UCP partition] 8
 [UCP partition] 8
 [UCP partition] 8
@@ -26,10 +26,10 @@ Heartbeat CPU 0 instructions: 10000000 cycles: 40025632 heartbeat IPC: 0.2498 cu
 [UCP partition] 8
 [UCP partition] 8
 [UCP partition] 8
-Heartbeat CPU 0 instructions: 20000002 cycles: 84224508 heartbeat IPC: 0.2263 cumulative IPC: 0.2267 (Simulation time: 00 hr 06 min 58 sec)
+Heartbeat CPU 0 instructions: 20000002 cycles: 84224508 heartbeat IPC: 0.2263 cumulative IPC: 0.2267 (Simulation time: 00 hr 06 min 56 sec)
 [UCP partition] 8
-Simulation finished CPU 0 instructions: 20000002 cycles: 87375185 cumulative IPC: 0.2289 (Simulation time: 00 hr 07 min 15 sec)
-Simulation complete CPU 0 instructions: 20000002 cycles: 87375185 cumulative IPC: 0.2289 (Simulation time: 00 hr 07 min 15 sec)
+Simulation finished CPU 0 instructions: 20000002 cycles: 87375185 cumulative IPC: 0.2289 (Simulation time: 00 hr 07 min 14 sec)
+Simulation complete CPU 0 instructions: 20000002 cycles: 87375185 cumulative IPC: 0.2289 (Simulation time: 00 hr 07 min 14 sec)
 
 ChampSim completed all CPUs
 
