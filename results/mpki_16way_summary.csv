@@ -1,0 +1,16 @@
+pair,policy,cpu0_llc_load_mpki,cpu1_llc_load_mpki
+mcf+bwaves,LRU,13.3197,0.51015
+mcf+bwaves,Static,17.07085,0.53065
+mcf+bwaves,UCP,12.9069,0.5043
+mcf+gcc,LRU,14.74325,13.7924
+mcf+gcc,Static,17.32465,15.26485
+mcf+gcc,UCP,13.4583,13.10495
+omnetpp+x264,LRU,9.0372,3.39425
+omnetpp+x264,Static,9.3004,3.43725
+omnetpp+x264,UCP,8.90195,3.3729
+xalancbmk+gcc,LRU,1.13185,8.1527
+xalancbmk+gcc,Static,1.12865,8.1532
+xalancbmk+gcc,UCP,1.17545,8.15325
+omnetpp+bwaves,LRU,8.9248,0.50135
+omnetpp+bwaves,Static,9.676,0.50905
+omnetpp+bwaves,UCP,8.8399,0.49735
